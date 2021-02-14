@@ -76,12 +76,17 @@ def padding_images(images, images_spec, max_height, max_width):
 
 
 if __name__ == "__main__":
-    cv2.imshow("before", images[6])
+    img_nbr = 10
+    x, y, w, h = int(labels[img_nbr][0]), int(labels[img_nbr][1]), int(labels[img_nbr][2]), int(labels[img_nbr][3])
+    img = cv2.rectangle(images[img_nbr], (x, y), (x + w, y + h), (0, 0, 255), 2)
+    cv2.imshow("before", img)
+    # cv2.imshow("before", images[6])
+
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
     images_padded, padding_info = padding_images(images, images_spec, MAX_HEIGHT, MAX_WIDTH)
 
-    cv2.imshow("after", images_padded[6])
+    cv2.imshow("after", images_padded[img_nbr])
     cv2.waitKey(0)
     cv2.destroyAllWindows()
