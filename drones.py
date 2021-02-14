@@ -4,13 +4,27 @@ import matplotlib.pyplot as plt
 import cv2
 import tensorflow as tf
 
-
 IMAGES_PATH = os.path.abspath("image")
 LABELS_PATH = os.path.abspath("label")
 
+# loading labels
+all_files_lbl = os.listdir(LABELS_PATH)
+labels = []
+
+for file in all_files_lbl:
+    # open the file and then call .read() to get the text
+    with open(os.path.join(LABELS_PATH, file), "rb") as f:
+        text = f.read()
+        labels.append(text.split()[1:])
+
+labels = np.array(labels).astype(float)
+
+# loading images
 onlyfiles = [f for f in os.listdir(IMAGES_PATH)]
+
 images = np.empty(len(onlyfiles), dtype=object)
 images_spec = np.empty((3, len(onlyfiles)), dtype=object)
+
 for i in range(0, len(onlyfiles)):
     images[i] = cv2.imread(os.path.join(IMAGES_PATH, onlyfiles[i]))
     # height, width, channels
