@@ -4,36 +4,38 @@ import matplotlib.pyplot as plt
 import cv2
 import pickle
 import tensorflow as tf
-import keras
+import keras as ks
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelBinarizer
 from sklearn.metrics import classification_report
 from tensorflow.keras.applications import MobileNetV2
-from tensorflow.keras.layers import *
-from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-from tensorflow.keras.preprocessing.image import img_to_array
-from tensorflow.keras.preprocessing.image import load_img
-from tensorflow.keras.utils import to_categorical
+from keras.layers import *
+from keras.models import Model
+from keras.optimizers import Adam
+from keras.applications.mobilenet_v2 import preprocess_input
+from keras.preprocessing.image import img_to_array
+from keras.preprocessing.image import load_img
+from keras.utils import to_categorical
+from keras.preprocessing.image import ImageDataGenerator
+from timeit import default_timer as timer
 
 # TODO: look for data augmentation? -->
 
 IMAGES_PATH = os.path.abspath("image")
 LABELS_PATH = os.path.abspath("label")
 
-# loading labels
+# loading targets
 all_files_lbl = os.listdir(LABELS_PATH)
-labels = []
+targets = []
 
 for file in all_files_lbl:
     # open the file and then call .read() to get the text
     with open(os.path.join(LABELS_PATH, file), "rb") as f:
         text = f.read()
-        labels.append(text.split()[1:])
+        targets.append(text.split()[1:])
 
-labels = np.array(labels).astype(float)
+
 
 # loading images
 onlyfiles = [f for f in os.listdir(IMAGES_PATH)]
@@ -51,20 +53,7 @@ MAX_WIDTH = np.max(images_spec[1])
 
 
 def padding_images(images, images_spec, max_height, max_width):
-    """
-    Parameters
-    ----------
-    images : np.array or list,
-             sequence of images
-    images_spec : np.array or list,
-                  sequence of the info of the image
-    max_height
-    max_width
 
-    Returns
-    -------
-    images_padded : np.array of padded images
-    """
     images_padded = []
     padding_info = []
 
@@ -96,6 +85,17 @@ def split_data(imgs, lbls, ratio=0.33, rdm_st=17, **kwargs):
     return X_train, X_test, y_train, y_test
 
 
+padded_images, padding_info = padding_images(images, images_spec, MAX_HEIGHT, MAX_WIDTH)
+
+# padded_images = padded_images / 255.0
+targets = np.array(targets, dtype="float32")
+padded_images = padded_images / 255.0
+targets = targets / 255.0
+
+
+X_train, X_test, y_train, y_test = split_data(padded_images, targets)
+
+
 ##
 # load the MobileNetV2 network, ensuring the head FC layer sets are
 # left off
@@ -104,39 +104,53 @@ baseModel = MobileNetV2(weights="imagenet", include_top=False,
 # construct the head of the model that will be placed on top of the
 # the base model
 headModel = baseModel.output
-headModel = AveragePooling2D(pool_size=(7, 7))(headModel)
-headModel = Flatten(name="flatten")(headModel)
+headModel = Flatten()(headModel)
+
 headModel = Dense(128, activation="relu")(headModel)
-headModel = Dropout(0.5)(headModel)
-headModel = Dense(2, activation="softmax")(headModel)
-# place the head FC model on top of the base model (this will become
-# the actual model we will train)
+headModel = Dense(64, activation="relu")(headModel)
+headModel = Dense(32, activation="relu")(headModel)
+headModel = Dense(4, activation="sigmoid")(headModel)
+
+# headModel = AveragePooling2D(pool_size=(7, 7))(headModel)
+# headModel = Flatten(name="flatten")(headModel)
+# headModel = Dense(128, activation="relu")(headModel)
+# headModel = Dropout(0.5)(headModel)
+# headModel = Dense(4, activation="softmax")(headModel)
+# # place the head FC model on top of the base model (this will become
+# # the actual model we will train)
 model = Model(inputs=baseModel.input, outputs=headModel)
 # loop over all layers in the base model and freeze them so they will
 # *not* be updated during the first training process
 for layer in baseModel.layers:
     layer.trainable = False
 
-# lb = LabelBinarizer()
-# labels = lb.fit_transform(labels)
-# labels = to_categorical(labels)
+
+class TimingCallback(ks.callbacks.Callback):
+    def __init__(self, logs={}):
+        self.logs = []
+
+    def on_epoch_begin(self, epoch, logs={}):
+        self.starttime = timer()
+
+    def on_epoch_end(self, epoch, logs={}):
+        self.logs.append(timer() - self.starttime)
+
+
+cb = TimingCallback()
 
 INIT_LR = 1e-4
-EPOCHS = 5
+EPOCHS = 34
 BS = 32
 
-padded_images, padding_info = padding_images(images, images_spec, MAX_HEIGHT, MAX_WIDTH)
-
-# padded_images = padded_images / 255.0
-padded_images = preprocess_input(padded_images)
-labels = labels / 255.0
-
-X_train, X_test, y_train, y_test = split_data(padded_images, labels)
 
 print("[INFO] compiling model...")
 opt = Adam(lr=INIT_LR)
-model.compile(loss="binary_crossentropy", optimizer=opt,
+model.compile(loss="huber", optimizer=opt,
               metrics=["accuracy"])
+
+model.summary()
+
+
 # train the head of the network
 print("[INFO] training head...")
 H = model.fit(
@@ -144,7 +158,16 @@ H = model.fit(
     steps_per_epoch=len(X_train) // BS,
     validation_data=(X_test, y_test),
     validation_steps=len(X_test) // BS,
-    epochs=EPOCHS)
+    epochs=EPOCHS,
+    callbacks=cb)
+
+print("saving model")
+model.save(os.path.join("output", "detector.h5"), save_format="h5")
+print("\n")
+print(cb.logs)
+print("Time to train:", sum(cb.logs), "seconds")
+if sum(cb.logs) >= 120:
+    print(sum(cb.logs) / 60, "minutes")
 
 # make predictions on the testing set
 print("[INFO] evaluating network...")
@@ -157,10 +180,12 @@ predIdxs = np.argmax(predIdxs, axis=1)
 #                             target_names=lb.classes_))
 
 N = EPOCHS
-plt.style.use("ggplot")
+plt.style.use('seaborn-whitegrid')
 plt.figure()
+plt.subplot(2, 1, 1)
 plt.plot(np.arange(0, N), H.history["loss"], label="train_loss")
 plt.plot(np.arange(0, N), H.history["val_loss"], label="val_loss")
+plt.subplot(2, 1, 2)
 plt.plot(np.arange(0, N), H.history["accuracy"], label="train_acc")
 plt.plot(np.arange(0, N), H.history["val_accuracy"], label="val_acc")
 plt.title("Training Loss and Accuracy")
@@ -168,11 +193,12 @@ plt.xlabel("Epoch #")
 plt.ylabel("Loss/Accuracy")
 plt.legend(loc="lower left")
 # plt.savefig(args["plot"])
+plt.show()
 
 if __name__ == "__main__":
     pass
     # img_nbr = 10
-    # x, y, w, h = int(labels[img_nbr][0]), int(labels[img_nbr][1]), int(labels[img_nbr][2]), int(labels[img_nbr][3])
+    # x, y, w, h = int(targets[img_nbr][0]), int(targets[img_nbr][1]), int(targets[img_nbr][2]), int(targets[img_nbr][3])
     # img = cv2.rectangle(images[img_nbr], (x, y), (x + w, y + h), (0, 0, 255), 2)
     # cv2.imshow("before", img)
     # # cv2.imshow("before", images[6])
